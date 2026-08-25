@@ -19,8 +19,5 @@ __pycache__/
 .pytest_cache/
 .venv/
 
-# Local benchmark material not included in the current submission
-datasets/raw/attacks/agent_task_pot*.jsonl
-datasets/raw/attacks/agent_task_test.jsonl
-datasets/raw/attacks/attack_tools_test.jsonl
+# Local licenses not included in the current submission
 licenses/

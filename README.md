@@ -2,7 +2,14 @@
 
 ## 攻击条目
 
-文件：`datasets/raw/attacks/all_attack_tools.jsonl`
+文件：
+
+- `datasets/raw/attacks/ops.jsonl`：40 条。包含提权、凭据获取、数据外传、日志篡改、备份破坏、命令注入和服务中断，可迁移到政企运维、数据库及服务器管理场景。
+- `datasets/raw/attacks/finance.jsonl`：34 条。包含资金调拨、交易复制、报表篡改、未授权提现、账户创建和交易延迟，可迁移到预算、报销、采购付款及资金审批场景。
+- `datasets/raw/attacks/records.jsonl`：104 条。包含档案访问、敏感信息泄露、记录修改、证书签发和数据外发，可迁移到人员档案、群众信息、项目材料及政务业务记录场景。
+- `datasets/raw/attacks/search.jsonl`：40 条。包含检索结果篡改、引用操控、身份伪造、知识库破坏和材料泄露，可迁移到内部知识库、政策检索、制度查询及报告生成场景。
+- `datasets/raw/attacks/workflow.jsonl`：78 条。包含订单修改、退款、价格调整、合同篡改、证据修改和材料越权共享，可迁移到采购、审批、合同、工单及项目流程场景。
+- `datasets/raw/attacks/control.jsonl`：74 条。包含传感数据篡改、控制权限劫持、软件更新植入、通信中断和运行参数修改，可迁移到城市设施、物联网、机房及运维控制场景。
 
 每行是一条攻击用例，字段含义：
 
@@ -13,6 +20,8 @@
 - `Attack Type`：攻击类型，原数据为 `Stealthy Attack` 或 `Disruptive Attack`。
 - `Corresponding Agent`：目标智能体类型，迁移时改为对应的政企业务智能体。
 - `Aggressive`：是否属于激进攻击。
+
+
 
 ## 正常任务
 
