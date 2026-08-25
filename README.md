@@ -1,3 +1,63 @@
+# 协作开发说明
+
+> **禁止直接向 `master` 提交或推送代码（已关闭权限）。每项修改必须从最新的 `master` 创建功能分支，完成后推送分支并发起合并。**
+
+## 分支命名
+
+修改 `datasets/raw/attacks/` 下的攻击条目：
+
+```text
+att/<真实文件名>_<修改行数>
+```
+
+示例：
+
+```text
+att/control_xx-xx
+att/finance_xx-xx
+```
+
+修改 `datasets/raw/scenarios/` 下的场景任务：
+
+```text
+sce/<场景名>/<文件类型>_<修改行数>
+```
+
+示例：
+
+```text
+sce/banking/user_xx-xx
+sce/workspace/injection_xx-xx
+```
+
+其中，攻击条目的 `<真实文件名>` 使用实际 JSONL 文件名且不带 `.jsonl`；场景名使用 `banking`、`slack`、`travel` 或 `workspace`，文件类型使用 `user`、`injection` 或 `environment`。
+
+## Git 操作
+
+开始修改前：
+
+```bash
+git switch master
+git pull origin master
+git switch -c att/control_xx-xx
+```
+
+场景任务将最后一行替换为对应分支，例如：
+
+```bash
+git switch -c sce/banking/user_xx-xx
+```
+
+完成修改后：
+
+```bash
+git add <修改的文件>
+git commit -m "说明本次修改内容"
+git push -u origin <分支名>
+```
+
+推送后在 GitHub 发起合并请求，不要使用 `git push origin master`。
+
 # 数据文件说明
 
 ## 攻击条目
