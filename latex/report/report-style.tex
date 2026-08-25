@@ -1,0 +1,95 @@
+\usepackage[
+  left=19mm,
+  right=19mm,
+  top=20mm,
+  bottom=19mm,
+  headheight=14pt,
+  headsep=5mm,
+  footskip=8mm
+]{geometry}
+
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{multirow}
+\usepackage{makecell}
+\usepackage{array}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{listings}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{hyperref}
+\usepackage[nameinlink,noabbrev]{cleveref}
+\usepackage[backend=biber,style=gb7714-2015,sorting=none]{biblatex}
+
+\addbibresource{bib/references.bib}
+
+\definecolor{ReportNavy}{HTML}{17364D}
+\definecolor{ReportBlue}{HTML}{155A8A}
+\definecolor{ReportCyan}{HTML}{1C9296}
+\definecolor{ReportLight}{HTML}{EDF4F7}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=ReportBlue,
+  citecolor=ReportBlue,
+  urlcolor=ReportBlue,
+  bookmarksnumbered=true
+}
+
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0pt}
+\linespread{1.20}
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.10}
+\setlist{nosep,leftmargin=2em,topsep=2pt}
+
+\renewcommand{\thesection}{\arabic{section}}
+\renewcommand{\thesubsection}{\thesection.\arabic{subsection}}
+\renewcommand{\thesubsubsection}{\thesubsection.\arabic{subsubsection}}
+
+\titleformat{\section}
+  {\bfseries\zihao{3}\color{ReportNavy}}
+  {\thesection}{0.65em}{}
+\titleformat{\subsection}
+  {\bfseries\zihao{4}\color{ReportBlue}}
+  {\thesubsection}{0.55em}{}
+\titleformat{\subsubsection}
+  {\bfseries\zihao{-4}\color{ReportNavy}}
+  {\thesubsubsection}{0.5em}{}
+\titlespacing*{\section}{0pt}{10pt}{4pt}
+\titlespacing*{\subsection}{0pt}{6pt}{2pt}
+\titlespacing*{\subsubsection}{0pt}{4pt}{1pt}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small XA-202620｜大模型智能体安全关键技术}
+\fancyhead[R]{\small 技术方案报告}
+\fancyfoot[C]{\small \thepage}
+\renewcommand{\headrulewidth}{0.35pt}
+
+\captionsetup{
+  font=small,
+  labelfont={bf,color=ReportBlue},
+  skip=4pt
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  frame=single,
+  rulecolor=\color{ReportBlue},
+  backgroundcolor=\color{ReportLight},
+  breaklines=true,
+  showstringspaces=false,
+  columns=fullflexible
+}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}

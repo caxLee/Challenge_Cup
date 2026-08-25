@@ -1,0 +1,555 @@
+# Copyright (c) Microsoft. All rights reserved.
+
+import sys
+import typing
+from collections.abc import Mapping
+from dataclasses import InitVar, is_dataclass
+from types import ModuleType, UnionType
+from typing import Any, Literal, TypeGuard, Union, cast, get_args, get_origin, get_type_hints
+
+import typing_extensions
+
+from .._agents import Agent
+
+# Pre-compute the TypeVar types for runtime-safe detection.
+# isinstance(x, TypeVar) can fail if TypeVar is a factory/callable
+# on some Python versions, so we compare against the actual runtime type.
+_TYPEVAR_TYPES: tuple[type, ...] = (type(typing.TypeVar("_T")), type(typing_extensions.TypeVar("_T")))  # pyright: ignore[reportUnknownVariableType]
+
+
+def _is_runtime_type(value: object) -> TypeGuard[type[Any]]:
+    if not isinstance(value, type):
+        return False
+    try:
+        type.__getattribute__(value, "__module__")
+        type.__getattribute__(value, "__qualname__")
+    except TypeError:
+        return False
+    return True
+
+
+def is_typevar(x: Any) -> bool:
+    """Check if x is an unresolved TypeVar instance (from typing or typing_extensions).
+
+    Args:
+        x: The value to check.
+
+    Returns:
+        True if x is a TypeVar instance, False otherwise.
+    """
+    return isinstance(x, _TYPEVAR_TYPES)
+
+
+def contains_typevar(annotation: Any) -> bool:
+    """Check if an annotation contains an unresolved TypeVar at any nesting level.
+
+    Args:
+        annotation: The annotation to inspect.
+
+    Returns:
+        True if the annotation or any nested type argument is a TypeVar, False otherwise.
+    """
+    if is_typevar(annotation):
+        return True
+
+    return any(contains_typevar(arg) for arg in get_args(annotation))
+
+
+def is_chat_agent(agent: Any) -> TypeGuard[Agent]:
+    """Check if the given agent is a Agent.
+
+    Args:
+        agent (Any): The agent to check.
+
+    Returns:
+        TypeGuard[Agent]: True if the agent is a Agent, False otherwise.
+    """
+    return isinstance(agent, Agent)
+
+
+def resolve_type_annotation(
+    type_annotation: type[Any] | UnionType | str | None,
+    globalns: dict[str, Any] | None = None,
+    localns: dict[str, Any] | None = None,
+) -> type[Any] | UnionType | None:
+    """Resolve a type annotation, including string forward references.
+
+    Args:
+        type_annotation: A type, union type, string forward reference, or None
+        globalns: Global namespace for resolving forward references (typically func.__globals__)
+        localns: Local namespace for resolving forward references
+
+    Returns:
+        The resolved type annotation. For string annotations, evaluates them in the
+        provided namespace. Returns None if type_annotation is None.
+
+    Raises:
+        NameError: If a forward reference cannot be resolved in the provided namespaces
+        SyntaxError: If a string annotation contains invalid Python syntax
+
+    Note:
+        This function uses eval() to resolve string type annotations. This is the same
+        approach used by Python's typing.get_type_hints() and typing.ForwardRef internally.
+        Security is managed by: (1) strings come from decorator parameters in source code,
+        not runtime user input, and (2) the eval namespace is restricted to the function's
+        module globals plus Union/Optional from typing.
+
+    Examples:
+        - resolve_type_annotation(str) -> str
+        - resolve_type_annotation("str | int", {"str": str, "int": int}) -> str | int
+        - resolve_type_annotation("MyClass", {"MyClass": MyClass}) -> MyClass
+    """
+    if type_annotation is None:
+        return None
+
+    if isinstance(type_annotation, str):
+        # Resolve string forward reference by evaluating it.
+        # This uses eval() which is the same approach as Python's typing.get_type_hints()
+        # and typing.ForwardRef._evaluate(). The namespace is restricted to the function's
+        # globals plus typing constructs, and input comes from developer source code.
+        eval_globalns = globalns.copy() if globalns else {}
+        eval_globalns.setdefault("Union", Union)
+        eval_globalns.setdefault("Optional", __import__("typing").Optional)
+
+        try:
+            return cast(
+                "type[Any] | UnionType",
+                eval(type_annotation, eval_globalns, localns),  # ruff:ignore[suspicious-eval-usage]  # nosec B307
+            )
+        except NameError as e:
+            raise NameError(
+                f"Could not resolve type annotation '{type_annotation}'. "
+                f"Make sure the type is defined or imported. Original error: {e}"
+            ) from e
+
+    return type_annotation
+
+
+def normalize_type_to_list(type_annotation: type[Any] | UnionType | None) -> list[type[Any] | UnionType]:
+    """Normalize a type annotation (possibly a union) to a list of concrete types.
+
+    Args:
+        type_annotation: A type, union type (using | or Union[]), or None
+
+    Returns:
+        A list of types. For union types, returns all members.
+        For None, returns an empty list.
+        For Optional[T] (Union[T, None]), returns [T, type(None)].
+
+    Examples:
+        - normalize_type_to_list(str) -> [str]
+        - normalize_type_to_list(str | int) -> [str, int]
+        - normalize_type_to_list(Union[str, int]) -> [str, int]
+        - normalize_type_to_list(None) -> []
+    """
+    if type_annotation is None:
+        return []
+
+    origin = get_origin(type_annotation)
+
+    # Handle Union types (str | int or Union[str, int])
+    if origin is Union or origin is UnionType:
+        return list(get_args(type_annotation))
+
+    # Single type
+    return [type_annotation]
+
+
+def is_instance_of(data: Any, target_type: type | UnionType | Any) -> bool:
+    """Check if the data is an instance of the target type.
+
+    Args:
+        data (Any): The data to check.
+        target_type (type): The type to check against.
+
+    Returns:
+        bool: True if data is an instance of target_type, False otherwise.
+    """
+    # Case 0: target_type is Any - always return True
+    if target_type is Any:
+        return True
+
+    origin = get_origin(target_type)
+    args = get_args(target_type)
+
+    # Case 1: origin is None, meaning target_type is not a generic type
+    if origin is None:
+        return isinstance(data, target_type)
+
+    # Case 2: target_type is Optional[T] or Union[T1, T2, ...]
+    # Optional[T] is really just as Union[T, None]
+    if origin is UnionType:
+        return any(is_instance_of(data, arg) for arg in args)
+
+    # Case 2b: Handle typing.Union (legacy Union syntax)
+    if origin is Union:
+        return any(is_instance_of(data, arg) for arg in args)
+
+    # Case 3: target_type is a generic type
+    if origin in [list, set]:
+        return isinstance(data, origin) and (
+            not args or all(any(is_instance_of(item, arg) for arg in args) for item in data)  # type: ignore[misc]
+        )
+
+    # Case 4: target_type is a tuple
+    if origin is tuple:
+        if len(args) == 2 and args[1] is Ellipsis:  # Tuple[T, ...] case
+            element_type = args[0]
+            return isinstance(data, tuple) and all(is_instance_of(item, element_type) for item in data)  # type: ignore[misc]
+        if len(args) == 1 and args[0] is Ellipsis:  # Tuple[...] case
+            return isinstance(data, tuple)
+        if len(args) == 0:
+            return isinstance(data, tuple)
+        return (
+            isinstance(data, tuple)
+            and len(data) == len(args)  # type: ignore
+            and all(is_instance_of(item, arg) for item, arg in zip(data, args, strict=False))  # type: ignore
+        )
+
+    # Case 5: target_type is a dict
+    if origin is dict:
+        return isinstance(data, dict) and (
+            not args
+            or all(
+                is_instance_of(key, args[0]) and is_instance_of(value, args[1])
+                for key, value in data.items()  # type: ignore
+            )
+        )
+
+    # Case 6: Other custom generic classes - check origin type only
+    # For generic classes, we check if data is an instance of the origin type
+    # We don't validate the generic parameters at runtime since that's handled by type system
+    if origin and hasattr(origin, "__name__"):
+        return isinstance(data, origin)
+
+    # Fallback: if we reach here, we assume data is an instance of the target_type
+    return isinstance(data, target_type)
+
+
+def _matches_annotation(data: Any, annotation: Any) -> bool:
+    """Check an annotation that may not be runtime-checkable, treating unchecked ones as a match."""
+    if get_origin(annotation) is Literal:
+        return any(data == member and type(data) is type(member) for member in get_args(annotation))
+    try:
+        return is_instance_of(data, annotation)
+    except TypeError:
+        # Annotated, NewType and friends cannot reach isinstance; rejecting them would break
+        # payloads that were accepted before field-level validation existed.
+        return True
+
+
+def _coerced_or_original(coerced: Any, original: Any, target_type: Any) -> Any:
+    """Keep a coercion only when it satisfies the annotation, so failures return the input."""
+    return coerced if _matches_annotation(coerced, target_type) else original
+
+
+def try_coerce_to_type(data: Any, target_type: type | UnionType | Any) -> Any:
+    """Try to coerce data to the target type.
+
+    Attempts lightweight type coercion for common cases where raw data
+    (e.g., from JSON deserialization) needs to be converted to the expected type.
+
+    Returns the coerced value if successful, or the original value if coercion
+    is not needed or not possible.
+
+    Args:
+        data: The data to coerce.
+        target_type: The type to coerce to.
+
+    Returns:
+        The coerced value, or the original value if coercion fails.
+    """
+    original_data = data
+
+    # If already the right type, return as-is
+    if _matches_annotation(data, target_type):
+        return data
+
+    origin = get_origin(target_type)
+
+    if origin in (UnionType, Union):
+        for member_type in get_args(target_type):
+            coerced_member = try_coerce_to_type(data, member_type)
+            if _matches_annotation(coerced_member, member_type):
+                return coerced_member
+        return original_data
+
+    if origin is list and isinstance(data, list):
+        item_types = get_args(target_type) or (Any,)
+        coerced_list = [try_coerce_to_type(item, item_types[0]) for item in cast(list[Any], data)]
+        return _coerced_or_original(coerced_list, original_data, target_type)
+
+    if origin is dict and isinstance(data, dict):
+        key_type, value_type = get_args(target_type) or (Any, Any)
+        coerced_mapping = {
+            try_coerce_to_type(key, key_type): try_coerce_to_type(value, value_type)
+            for key, value in cast(dict[Any, Any], data).items()
+        }
+        return _coerced_or_original(coerced_mapping, original_data, target_type)
+
+    # JSON has no tuples or sets, so sequence payloads have to be rebuilt into them.
+    if origin in (set, frozenset) and isinstance(data, list):
+        item_types = get_args(target_type)
+        item_type = item_types[0] if item_types else Any
+        coerced_items = [try_coerce_to_type(item, item_type) for item in cast(list[Any], data)]
+        if not all(_matches_annotation(item, item_type) for item in coerced_items):
+            return original_data
+        try:
+            coerced_set = frozenset(coerced_items) if origin is frozenset else set(coerced_items)
+        except TypeError:
+            # An item that stayed unhashable never belonged in this set.
+            return original_data
+        return _coerced_or_original(coerced_set, original_data, target_type)
+
+    if origin is tuple and isinstance(data, list):
+        items = cast(list[Any], data)
+        item_types = get_args(target_type)
+        if len(item_types) == 2 and item_types[1] is Ellipsis:
+            item_types = (item_types[0],) * len(items)
+        if len(item_types) != len(items):
+            return original_data
+        coerced_tuple = tuple(
+            try_coerce_to_type(item, item_type) for item, item_type in zip(items, item_types, strict=True)
+        )
+        return _coerced_or_original(coerced_tuple, original_data, target_type)
+
+    # Can't coerce to non-concrete targets (generic aliases, etc.)
+    if not isinstance(target_type, type):
+        return original_data
+
+    target_cls: type[Any] = target_type
+
+    # int -> float (JSON integers for float fields)
+    if isinstance(data, int) and not isinstance(data, bool) and target_cls is float:
+        return float(data)
+
+    # dict -> dataclass, pydantic model, or SerializationMixin type
+    if isinstance(data, dict):
+        payload = cast(dict[str, Any], data)
+
+        if is_dataclass(target_cls):
+            return _coerce_dict_to_dataclass(payload, target_cls)
+
+        model_validate = getattr(target_cls, "model_validate", None)
+        if callable(model_validate):
+            try:
+                return model_validate(payload)
+            except Exception:
+                return original_data
+
+        from_dict = getattr(target_cls, "from_dict", None)
+        if callable(from_dict):
+            try:
+                return from_dict(payload)
+            except Exception:
+                return original_data
+
+    return original_data
+
+
+def _coerce_dict_to_dataclass(data: dict[str, Any], target_cls: type[Any]) -> Any:
+    """Build a dataclass from a JSON-like dict, coercing each field to its annotation."""
+    try:
+        field_types = get_type_hints(target_cls)
+    except Exception:
+        field_types = {}
+
+    # __dataclass_fields__ keeps InitVar pseudo-fields that fields() drops, and the constructor takes them.
+    init_field_names = {name for name, field in target_cls.__dataclass_fields__.items() if field.init}
+
+    coerced_fields: dict[str, Any] = {}
+    for name, value in data.items():
+        if name not in init_field_names:
+            return data
+        annotation = field_types.get(name, Any)
+        if type(annotation) is InitVar:
+            annotation = cast(Any, annotation).type
+        coerced_value = try_coerce_to_type(value, annotation)
+        # Callers validate the outer type only, so a mismatched field has to fail the whole build.
+        if not _matches_annotation(coerced_value, annotation):
+            return data
+        coerced_fields[name] = coerced_value
+
+    try:
+        return target_cls(**coerced_fields)
+    except Exception:
+        # Constructor validation of any kind fails the build; it must not escape to callers
+        # that have no coercion error path.
+        return data
+
+
+def serialize_type(t: type) -> str:
+    """Serialize a type to a string.
+
+    For example,
+
+    serialize_type(int) => "builtins.int"
+    """
+    return f"{t.__module__}.{t.__qualname__}"
+
+
+def deserialize_type(
+    serialized_type_string: str,
+    *,
+    allowed_types: Mapping[str, type[Any]] | None = None,
+) -> type:
+    """Deserialize a serialized type string.
+
+    Resolution is limited to exact caller-supplied types or types already present
+    in loaded module namespaces. This function never imports a module selected by
+    the serialized value.
+
+    Args:
+        serialized_type_string: Fully qualified serialized type name.
+        allowed_types: Optional exact mapping of serialized names to trusted types.
+
+    For example,
+
+    deserialize_type("builtins.int") => int
+    """
+    if allowed_types is not None and serialized_type_string in allowed_types:
+        resolved = allowed_types[serialized_type_string]
+        if not _is_runtime_type(resolved):
+            raise TypeError(f"allowed_types entry {serialized_type_string!r} must be a type.")
+        if serialize_type(resolved) != serialized_type_string:
+            raise ValueError(f"allowed_types entry {serialized_type_string!r} does not match the supplied type.")
+        return resolved
+
+    module_name, _, type_name = serialized_type_string.rpartition(".")
+    module = sys.modules.get(module_name)
+    if not isinstance(module, ModuleType):
+        raise ModuleNotFoundError(f"No module named {module_name!r}", name=module_name)
+
+    namespace = ModuleType.__getattribute__(module, "__dict__")
+    if type_name not in namespace:
+        raise AttributeError(f"{module_name!r} has no attribute {type_name!r}")
+
+    resolved = namespace[type_name]
+    if not _is_runtime_type(resolved):
+        raise TypeError(f"{serialized_type_string!r} does not resolve to a type.")
+    return resolved
+
+
+def is_type_compatible(source_type: type | UnionType | Any, target_type: type | UnionType | Any) -> bool:
+    """Check if source_type is compatible with target_type.
+
+    A type is compatible if values of source_type can be assigned to variables of target_type.
+    For example:
+    - list[Message] is compatible with list[str | Message]
+    - str is compatible with str | int
+    - int is compatible with Any
+
+    Args:
+        source_type: The type being assigned from
+        target_type: The type being assigned to
+
+    Returns:
+        bool: True if source_type is compatible with target_type, False otherwise
+    """
+    # Case 0: target_type is Any - always compatible
+    if target_type is Any:
+        return True
+
+    # Case 1: exact type match
+    if source_type == target_type:
+        return True
+
+    source_origin = get_origin(source_type)
+    source_args = get_args(source_type)
+    target_origin = get_origin(target_type)
+    target_args = get_args(target_type)
+
+    # Case 2: target is Union/Optional - source is compatible if it matches any target member
+    if target_origin is Union or target_origin is UnionType:
+        # Special case: if source is also a Union, check that each source member
+        # is compatible with at least one target member
+        if source_origin is Union or source_origin is UnionType:
+            return all(
+                any(is_type_compatible(source_arg, target_arg) for target_arg in target_args)
+                for source_arg in source_args
+            )
+        # If source is not a Union, check if it's compatible with any target member
+        return any(is_type_compatible(source_type, arg) for arg in target_args)
+
+    # Case 3: source is Union (and target is not Union) - each source member must be compatible with target
+    if source_origin is Union or source_origin is UnionType:
+        return all(is_type_compatible(arg, target_type) for arg in source_args)
+
+    # Case 4: both are non-generic types
+    if source_origin is None and target_origin is None:
+        # Only call issubclass if both are actual types, not UnionType or Any
+        if isinstance(source_type, type) and isinstance(target_type, type):
+            try:
+                return issubclass(source_type, target_type)
+            except TypeError:
+                # Handle cases where issubclass doesn't work (e.g., with special forms)
+                return False
+        return source_type == target_type
+
+    # Case 5: different container types are not compatible
+    if source_origin != target_origin:
+        return False
+
+    # Case 6: same container type - check generic arguments
+    if source_origin in [list, set]:
+        if not source_args and not target_args:
+            return True  # Both are untyped
+        if not source_args or not target_args:
+            return True  # One is untyped - assume compatible
+        # For collections, source element type must be compatible with target element type
+        return is_type_compatible(source_args[0], target_args[0])
+
+    # Case 7: tuple compatibility
+    if source_origin is tuple:
+        if not source_args and not target_args:
+            return True  # Both are untyped tuples
+        if not source_args or not target_args:
+            return True  # One is untyped - assume compatible
+
+        # Handle Tuple[T, ...] (variable length)
+        if len(source_args) == 2 and source_args[1] is Ellipsis:
+            if len(target_args) == 2 and target_args[1] is Ellipsis:
+                return is_type_compatible(source_args[0], target_args[0])
+            return False  # Variable length can't be assigned to fixed length
+
+        if len(target_args) == 2 and target_args[1] is Ellipsis:
+            # Fixed length can be assigned to variable length if element types are compatible
+            return all(is_type_compatible(source_arg, target_args[0]) for source_arg in source_args)
+
+        # Fixed length tuples must have same length and compatible element types
+        if len(source_args) != len(target_args):
+            return False
+        return all(is_type_compatible(s_arg, t_arg) for s_arg, t_arg in zip(source_args, target_args, strict=False))
+
+    # Case 8: dict compatibility
+    if source_origin is dict:
+        if not source_args and not target_args:
+            return True  # Both are untyped dicts
+        if not source_args or not target_args:
+            return True  # One is untyped - assume compatible
+        if len(source_args) != 2 or len(target_args) != 2:
+            return False  # Malformed dict types
+        # Both key and value types must be compatible
+        return is_type_compatible(source_args[0], target_args[0]) and is_type_compatible(source_args[1], target_args[1])
+
+    # Case 9: custom generic classes - check if origins are the same and args are compatible
+    if source_origin and target_origin and source_origin == target_origin:
+        if not source_args and not target_args:
+            return True  # Both are untyped generics
+        if not source_args or not target_args:
+            return True  # One is untyped - assume compatible
+        if len(source_args) != len(target_args):
+            return False  # Different number of type parameters
+        return all(is_type_compatible(s_arg, t_arg) for s_arg, t_arg in zip(source_args, target_args, strict=False))
+
+    # Case 10: fallback - check if source is subclass of target (for non-generic types)
+    if source_origin is None and target_origin is None:
+        try:
+            # Only call issubclass if both are actual types, not UnionType or Any
+            if isinstance(source_type, type) and isinstance(target_type, type):
+                return issubclass(source_type, target_type)
+            return source_type == target_type
+        except TypeError:
+            return False
+
+    return False

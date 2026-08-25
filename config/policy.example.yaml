@@ -1,0 +1,16 @@
+version: 1
+
+# Only the stable configuration boundary is declared at this stage. Business
+# rules will be added after the FIDES and OpenClaw execution chain is verified.
+defaults:
+  unlabeled_integrity: untrusted
+  unlabeled_confidentiality: public
+  on_engine_error: block
+
+fides:
+  auto_hide_untrusted: true
+  enable_policy_enforcement: true
+  approval_on_violation: true
+
+capability_mappings: {}
+enterprise_policies: []

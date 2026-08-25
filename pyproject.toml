@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "enterprise-agent-guard"
+version = "0.1.0"
+description = "Framework-neutral runtime security governance for tool-using agents"
+requires-python = ">=3.10"
+dependencies = [
+  "msgspec>=0.20.0,<0.22",
+  "typing-extensions>=4.15.0,<5",
+  "pydantic>=2,<3",
+  "python-dotenv>=1,<2",
+  "opentelemetry-api>=1.39.0,<2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_framework", "src/core", "src/adapters"]
