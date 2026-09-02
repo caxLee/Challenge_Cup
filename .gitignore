@@ -18,6 +18,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+.env
+.env.*
+!.env.example
 
 # Local licenses not included in the current submission
 licenses/
