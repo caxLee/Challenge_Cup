@@ -7,7 +7,7 @@ import inspect
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from agent_framework import FunctionInvocationContext, FunctionTool
+from agent_framework import Content, FunctionInvocationContext, FunctionTool
 from agent_framework._middleware import FunctionMiddlewarePipeline
 from agent_framework.security import (
     ConfidentialityLabel,
@@ -16,7 +16,8 @@ from agent_framework.security import (
     SecureAgentConfig,
 )
 
-from core.contracts import CanonicalSecurityEvent
+from core import CanonicalSecurityEvent, Disposition, RiskAssessment, RuleRiskEngine
+from .approval import FidesApprovalAdapter
 from eval.runtime import Function, FunctionsRuntime, TaskEnvironment, ToolNotFoundError
 
 
@@ -50,9 +51,13 @@ class FidesRuntimeAdapter(FunctionsRuntime):
         *,
         tool_metadata: Mapping[str, Mapping[str, Any]] | None = None,
         security: SecureAgentConfig | None = None,
+        risk_engine: RuleRiskEngine | None = None,
+        approvals: FidesApprovalAdapter | None = None,
     ) -> None:
         super().__init__(functions)
         self.security = security or SecureAgentConfig()
+        self.risk_engine = risk_engine or RuleRiskEngine()
+        self.approvals = approvals or FidesApprovalAdapter()
         middleware = [self.security.label_tracker]
         if self.security.policy_enforcer is not None:
             middleware.append(self.security.policy_enforcer)
@@ -145,3 +150,27 @@ class FidesRuntimeAdapter(FunctionsRuntime):
             if raise_on_error:
                 raise
             return "", f"{type(exc).__name__}: {exc}"
+
+    def run_event(
+        self,
+        environment: TaskEnvironment,
+        event: CanonicalSecurityEvent,
+        *,
+        approval_response: Content | None = None,
+        approver: Mapping[str, Any] | None = None,
+    ) -> tuple[Any, str | None, RiskAssessment]:
+        """Risk-route one canonical event before invoking its tool."""
+
+        assessment = self.risk_engine.evaluate(event)
+        if assessment.disposition is Disposition.BLOCK:
+            return "", f"RiskBlocked: {', '.join(assessment.reasons)}", assessment
+        if assessment.disposition in {Disposition.CONFIRM, Disposition.APPROVE}:
+            if approval_response is None:
+                return self.approvals.request(event, assessment), None, assessment
+            result = self.approvals.resolve(
+                event, assessment, approval_response, approver=dict(approver or {})
+            )
+            if not result.approved:
+                return "", f"ApprovalDenied: {result.reason}", assessment
+        value, error = self.run_function(environment, event.tool_name, event.arguments)
+        return value, error, assessment
