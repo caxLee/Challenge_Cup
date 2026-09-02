@@ -12,6 +12,7 @@ from openai import OpenAI
 from pydantic import Field
 
 from adapters import FidesRuntimeAdapter
+from core import SourceDescriptor, ToolDescriptor, ToolMetadataResolver, TrustBoundary
 
 from .cases import AttackCase, load_attack_cases
 from .runtime import Depends, FunctionsRuntime, TaskEnvironment, make_function
@@ -41,12 +42,21 @@ def execute_enterprise_action(
 
 
 FUNCTIONS = [make_function(read_pending_notice), make_function(execute_enterprise_action)]
+_metadata = ToolMetadataResolver()
 TOOL_METADATA = {
-    "read_pending_notice": {
-        "source_integrity": "untrusted",
-        "accepts_untrusted": True,
-    },
-    "execute_enterprise_action": {"source_integrity": "trusted"},
+    "read_pending_notice": _metadata.resolve(
+        ToolDescriptor(
+            read_only=True,
+            source=SourceDescriptor(
+                boundary=TrustBoundary.EXTERNAL,
+                authenticated=False,
+                open_world=True,
+            ),
+        )
+    ),
+    "execute_enterprise_action": _metadata.resolve(
+        ToolDescriptor(read_only=False, open_world=False)
+    ),
 }
 
 
@@ -97,7 +107,7 @@ def _run(case: AttackCase, *, protected: bool) -> tuple[bool, str, list[str]]:
         runtime: FunctionsRuntime = FidesRuntimeAdapter(
             FUNCTIONS,
             tool_metadata=TOOL_METADATA,
-            security=SecureAgentConfig(),
+            security=SecureAgentConfig(auto_hide_untrusted=False),
         )
     else:
         runtime = FunctionsRuntime(FUNCTIONS)

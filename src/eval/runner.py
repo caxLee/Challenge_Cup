@@ -9,7 +9,7 @@ from .runtime import FunctionCall, FunctionsRuntime
 from .tasks import BaseInjectionTask, BaseUserTask
 
 
-SCENES = ("banking", "slack", "travel", "workspace")
+SCENES = ("banking", "slack", "travel", "workspace", "operations")
 
 
 @dataclass
