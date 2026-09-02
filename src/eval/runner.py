@@ -36,13 +36,33 @@ def _execute(runtime: FunctionsRuntime, environment, calls: list[FunctionCall]) 
     return traces
 
 
-def check_task(scene: str, task: BaseUserTask | BaseInjectionTask, suite) -> CheckResult:
+def check_task(
+    scene: str,
+    task: BaseUserTask | BaseInjectionTask,
+    suite,
+    *,
+    secure: bool = False,
+) -> CheckResult:
     kind = "user" if isinstance(task, BaseUserTask) else "injection"
     try:
         environment = suite.load_environment()
         environment = task.init_environment(environment) if isinstance(task, BaseUserTask) else environment
         before = environment.model_copy(deep=True)
-        runtime = FunctionsRuntime(suite.tools)
+        if secure:
+            from adapters import FidesRuntimeAdapter
+            from agent_framework.security import SecureAgentConfig
+
+            runtime = FidesRuntimeAdapter(
+                suite.tools,
+                tool_metadata={
+                    tool.name: {"source_integrity": "trusted"} for tool in suite.tools
+                },
+                security=SecureAgentConfig(auto_hide_untrusted=False),
+            )
+            if isinstance(task, BaseInjectionTask):
+                runtime.observe(task.GOAL)
+        else:
+            runtime = FunctionsRuntime(suite.tools)
         traces = _execute(runtime, environment, task.ground_truth(before))
         output = task.GROUND_TRUTH_OUTPUT
         if isinstance(task, BaseUserTask):
@@ -56,20 +76,21 @@ def check_task(scene: str, task: BaseUserTask | BaseInjectionTask, suite) -> Che
         return CheckResult(scene, task.ID, kind, False, f"{type(exc).__name__}: {exc}")
 
 
-def check_scene(scene: str) -> list[CheckResult]:
+def check_scene(scene: str, *, secure: bool = False) -> list[CheckResult]:
     suite = load_suite(scene)
     tasks = [*suite.user_tasks.values(), *suite.injection_tasks.values()]
-    return [check_task(scene, task, suite) for task in tasks]
+    return [check_task(scene, task, suite, secure=secure) for task in tasks]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate local task suites")
     parser.add_argument("--scene", choices=(*SCENES, "all"), default="all")
     parser.add_argument("--json", action="store_true", dest="as_json")
+    parser.add_argument("--secure", action="store_true", help="Run tools through the bundled security middleware")
     args = parser.parse_args()
 
     scenes = SCENES if args.scene == "all" else (args.scene,)
-    results = [result for scene in scenes for result in check_scene(scene)]
+    results = [result for scene in scenes for result in check_scene(scene, secure=args.secure)]
     if args.as_json:
         print(json.dumps([asdict(result) for result in results], ensure_ascii=False, indent=2))
     else:

@@ -1,5 +1,5 @@
-"""Framework adapters. Only the FIDES label bridge is implemented initially."""
+"""Framework adapters."""
 
-from .fides import FidesLabelAdapter
+from .fides import FidesLabelAdapter, FidesRuntimeAdapter
 
-__all__ = ["FidesLabelAdapter"]
+__all__ = ["FidesLabelAdapter", "FidesRuntimeAdapter"]
