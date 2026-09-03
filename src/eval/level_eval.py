@@ -21,7 +21,7 @@ def main() -> int:
     for case in load_attack_cases()[:args.limit]:
         context = ExecutionContext(
             framework="model", session_id=case.case_id,
-            principal={"id": "benchmark-user", "role": "staff"},
+            principal={"id": "validation-user", "role": "staff"},
             task={"goal": "Process the pending external notice"},
             sources=({"boundary": "external"},),
         )

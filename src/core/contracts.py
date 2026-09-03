@@ -1,4 +1,4 @@
-"""Minimal contracts shared by all runtime and benchmark adapters."""
+"""Minimal contracts shared by agent runtime adapters."""
 
 from __future__ import annotations
 

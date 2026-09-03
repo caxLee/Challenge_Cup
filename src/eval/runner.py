@@ -4,7 +4,9 @@ import argparse
 import importlib
 import json
 from dataclasses import asdict, dataclass
+from typing import Any
 
+from core import ExecutionContext
 from .runtime import FunctionCall, FunctionsRuntime
 from .tasks import BaseInjectionTask, BaseUserTask
 
@@ -19,6 +21,8 @@ class CheckResult:
     kind: str
     passed: bool
     error: str | None = None
+    risk_levels: tuple[str, ...] = ()
+    dispositions: tuple[str, ...] = ()
 
 
 def load_suite(scene: str):
@@ -36,6 +40,34 @@ def _execute(runtime: FunctionsRuntime, environment, calls: list[FunctionCall]) 
     return traces
 
 
+def _execute_governed(
+    runtime: Any,
+    environment: Any,
+    calls: list[FunctionCall],
+    *,
+    scene: str,
+    task: BaseUserTask | BaseInjectionTask,
+) -> tuple[list[FunctionCall], tuple[str, ...], tuple[str, ...]]:
+    traces: list[FunctionCall] = []
+    levels: list[str] = []
+    dispositions: list[str] = []
+    for call in calls:
+        goal = getattr(task, "GOAL", getattr(task, "PROMPT", ""))
+        sources = getattr(task, "SOURCES", ({"boundary": "user"},))
+        context = ExecutionContext(
+            framework="eval",
+            session_id=f"{scene}:{task.ID}",
+            principal={"id": "eval-user", "role": "staff"},
+            task={"goal": goal},
+            sources=tuple(sources),
+        )
+        _, _, assessment = runtime.run_tool(environment, call.function, call.args, context)
+        traces.append(call)
+        levels.append(assessment.level.value)
+        dispositions.append(assessment.disposition.value)
+    return traces, tuple(levels), tuple(dispositions)
+
+
 def check_task(
     scene: str,
     task: BaseUserTask | BaseInjectionTask,
@@ -48,22 +80,33 @@ def check_task(
         environment = suite.load_environment()
         environment = task.init_environment(environment) if isinstance(task, BaseUserTask) else environment
         before = environment.model_copy(deep=True)
+        governed = secure and scene == "operations"
         if secure:
             from adapters import FidesRuntimeAdapter
             from agent_framework.security import SecureAgentConfig
 
+            tool_manifest = None
+            if governed:
+                from eval.scenarios.operations.task_suite import TOOL_MANIFEST
+
+                tool_manifest = TOOL_MANIFEST
             runtime = FidesRuntimeAdapter(
                 suite.tools,
-                tool_metadata={
+                tool_manifest=tool_manifest,
+                tool_metadata=None if governed else {
                     tool.name: {"source_integrity": "trusted"} for tool in suite.tools
                 },
                 security=SecureAgentConfig(auto_hide_untrusted=False),
             )
-            if isinstance(task, BaseInjectionTask):
-                runtime.observe(task.GOAL)
         else:
             runtime = FunctionsRuntime(suite.tools)
-        traces = _execute(runtime, environment, task.ground_truth(before))
+        if governed:
+            traces, risk_levels, dispositions = _execute_governed(
+                runtime, environment, task.ground_truth(before), scene=scene, task=task
+            )
+        else:
+            traces = _execute(runtime, environment, task.ground_truth(before))
+            risk_levels = dispositions = ()
         output = task.GROUND_TRUTH_OUTPUT
         if isinstance(task, BaseUserTask):
             trace_result = task.utility_from_traces(output, before, environment, traces)
@@ -71,7 +114,10 @@ def check_task(
         else:
             trace_result = task.security_from_traces(output, before, environment, traces)
             passed = trace_result if trace_result is not None else task.security(output, before, environment)
-        return CheckResult(scene, task.ID, kind, bool(passed))
+        return CheckResult(
+            scene, task.ID, kind, bool(passed),
+            risk_levels=risk_levels, dispositions=dispositions,
+        )
     except Exception as exc:
         return CheckResult(scene, task.ID, kind, False, f"{type(exc).__name__}: {exc}")
 

@@ -149,7 +149,7 @@ def _run(case: AttackCase, *, protected: bool) -> tuple[bool, str, list[str], li
             if protected:
                 context = ExecutionContext(
                     framework="model", session_id=case.case_id,
-                    principal={"id": "benchmark-user", "role": "staff"},
+                    principal={"id": "validation-user", "role": "staff"},
                     task={"goal": "Process the pending external notice"},
                     sources=({"boundary": "external"},),
                     observations=(environment.notice,) if "read_pending_notice" in trace[:-1] else (),

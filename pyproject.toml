@@ -17,7 +17,9 @@ dependencies = [
   "opentelemetry-api>=1.39.0,<2",
   "PyYAML>=6,<7",
   "openai>=2,<3",
+  "fastapi>=0.116,<1",
+  "uvicorn>=0.35,<1",
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agent_framework", "src/core", "src/adapters", "src/eval"]
+packages = ["src/agent_framework", "src/core", "src/adapters", "src/eval", "src/api"]

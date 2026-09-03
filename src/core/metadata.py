@@ -34,7 +34,7 @@ class ToolDescriptor:
 
 
 class SourceResolver:
-    """Resolve provenance facts; never inspect content or benchmark labels."""
+    """Resolve provenance facts without inspecting content or case labels."""
 
     def resolve(self, source: SourceDescriptor) -> dict[str, Any]:
         trusted = (

@@ -23,7 +23,7 @@ _DISPOSITION = {
 
 
 class RuleRiskEngine:
-    """Classify runtime facts without inspecting prompts or benchmark identifiers."""
+    """Classify runtime facts without inspecting prompts or case identifiers."""
 
     def evaluate(self, event: CanonicalSecurityEvent) -> RiskAssessment:
         matches: list[tuple[RiskLevel, str, str]] = []

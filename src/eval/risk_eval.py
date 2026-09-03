@@ -25,7 +25,7 @@ def update_record(
 
 def event(**changes: object) -> CanonicalSecurityEvent:
     values = {
-        "framework": "demo", "session_id": "session-1", "tool_name": "records.update",
+        "framework": "validation", "session_id": "session-1", "tool_name": "records.update",
         "arguments": {"record_id": "42"}, "principal": {"id": "user-1", "role": "staff"},
     }
     values.update(changes)

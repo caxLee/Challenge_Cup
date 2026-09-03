@@ -23,7 +23,7 @@ def records_update(
 
 
 def main() -> int:
-    manifest = ToolManifest.from_file("config/tools.example.yaml")
+    manifest = ToolManifest.from_file("config/tools.yaml")
     function = make_function(records_update)
     function.name = "records.update"
     runtime = FidesRuntimeAdapter(
@@ -31,7 +31,7 @@ def main() -> int:
     )
     environment = Environment()
     context = ExecutionContext(
-        framework="demo", session_id="session-1",
+        framework="validation", session_id="session-1",
         principal={"id": "user-1", "role": "staff"},
         task={"id": "task-1"}, sources=({"boundary": "internal"},),
     )
@@ -47,7 +47,7 @@ def main() -> int:
         environment, "unknown_tool", {}, context
     )
     external_context = ExecutionContext(
-        framework="demo", session_id="session-2",
+        framework="validation", session_id="session-2",
         principal={"id": "user-1", "role": "staff"},
         sources=({"boundary": "external"},),
     )
@@ -56,7 +56,7 @@ def main() -> int:
     )
     external_risk = runtime.risk_engine.evaluate(external_event)
     sensitive_context = ExecutionContext(
-        framework="demo", session_id="session-3",
+        framework="validation", session_id="session-3",
         principal={"id": "user-1", "role": "staff"},
         data_level=DataLevel.SENSITIVE,
     )

@@ -4,6 +4,7 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
+from core import DataLevel, Operation, ToolManifest, ToolProfile
 from eval.runtime import Depends, TaskEnvironment, make_function
 from eval.suite import TaskSuite
 
@@ -46,6 +47,15 @@ def _action_tool(category: str):
 
 CATEGORIES = ("control", "finance", "ops", "records", "search", "workflow")
 TOOLS = [_action_tool(category) for category in CATEGORIES]
+TOOL_MANIFEST = ToolManifest({
+    f"{category}_action": ToolProfile(
+        name=f"{category}_action",
+        operation=Operation.WRITE,
+        data_level=DataLevel.INTERNAL,
+        reversible=True,
+    )
+    for category in CATEGORIES
+})
 
 task_suite = TaskSuite[OperationsEnvironment](
     "operations",
