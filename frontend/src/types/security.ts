@@ -21,6 +21,19 @@ export interface TaskRequest {
   observations?: string[];
   destination?: Record<string, unknown>;
   authorized?: boolean;
+  case_id?: string;
+  case_title?: string;
+  case_source?: string;
+}
+
+export interface DemoRequest {
+  id: string;
+  title: string;
+  description: string;
+  source: string;
+  raw_case: Record<string, unknown>;
+  expected_level: RiskLevel;
+  payload: TaskRequest;
 }
 
 export interface RiskAssessment {
@@ -81,6 +94,8 @@ export interface AuditRecord {
   task_id: string;
   user_id: string;
   tool: string;
+  case_title?: string | null;
+  case_source?: string | null;
   risk_level: RiskLevel | null;
   status: TaskStatus;
   events: TaskEvent[];

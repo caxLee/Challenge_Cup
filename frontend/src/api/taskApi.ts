@@ -1,5 +1,9 @@
 import { apiRequest } from "./client";
-import type { TaskEvent, TaskRequest, TaskResponse } from "../types/security";
+import type { DemoRequest, TaskEvent, TaskRequest, TaskResponse } from "../types/security";
+
+export function getDemoRequests(): Promise<DemoRequest[]> {
+  return apiRequest<DemoRequest[]>("/demo/requests");
+}
 
 export function createTask(payload: TaskRequest): Promise<TaskResponse> {
   return apiRequest<TaskResponse>("/tasks", {

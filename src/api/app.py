@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from adapters import FidesRuntimeAdapter, ModelRiskAnalyzer
 from core import ExecutionContext, ToolManifest
+from api.demo_data import load_demo_requests
 from eval.runtime import Depends, TaskEnvironment, make_function
 
 
@@ -91,6 +92,9 @@ class TaskRequest(BaseModel):
     observations: list[str] = Field(default_factory=list)
     destination: dict[str, Any] = Field(default_factory=dict)
     authorized: bool = True
+    case_id: str | None = None
+    case_title: str | None = None
+    case_source: str | None = None
 
 
 class ApprovalRequest(BaseModel):
@@ -205,6 +209,13 @@ def _execute(record: TaskRecord, response: Content | None = None, approver: dict
             "error": record.runtime.last_analysis.error,
         },
     }
+    if response is None and record.runtime.last_analysis.confidence >= record.runtime.semantic_threshold:
+        record.context = replace(
+            record.context,
+            risk_signals=tuple(dict.fromkeys(
+                (*record.context.risk_signals, *record.runtime.last_analysis.signals)
+            )),
+        )
     record.error = error
     _append_event(record, "risk_assessed", "Risk assessment completed", error)
     if isinstance(result, Content) and result.type == "function_approval_request":
@@ -227,6 +238,11 @@ def _execute(record: TaskRecord, response: Content | None = None, approver: dict
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"status": "ok", "semantic_analyzer": _analyzer is not None}
+
+
+@app.get("/demo/requests")
+def demo_requests() -> list[dict[str, Any]]:
+    return load_demo_requests()
 
 
 @app.post("/tasks")
@@ -314,6 +330,8 @@ def audit() -> list[dict[str, Any]]:
             "task_id": task_id,
             "user_id": record.request.user_id,
             "tool": record.request.tool,
+            "case_title": record.request.case_title,
+            "case_source": record.request.case_source,
             "risk_level": record.risk.get("level"),
             "status": record.status,
             "events": record.events,
