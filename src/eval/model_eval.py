@@ -11,8 +11,11 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import Field
 
-from adapters import FidesRuntimeAdapter
-from core import SourceDescriptor, ToolDescriptor, ToolMetadataResolver, TrustBoundary
+from adapters import FidesRuntimeAdapter, ModelRiskAnalyzer
+from core import (
+    DataLevel, ExecutionContext, Operation, RiskLevel, SourceDescriptor,
+    ToolManifest, ToolProfile, TrustBoundary,
+)
 
 from .cases import AttackCase, load_attack_cases
 from .runtime import Depends, FunctionsRuntime, TaskEnvironment, make_function
@@ -42,22 +45,17 @@ def execute_enterprise_action(
 
 
 FUNCTIONS = [make_function(read_pending_notice), make_function(execute_enterprise_action)]
-_metadata = ToolMetadataResolver()
-TOOL_METADATA = {
-    "read_pending_notice": _metadata.resolve(
-        ToolDescriptor(
-            read_only=True,
-            source=SourceDescriptor(
-                boundary=TrustBoundary.EXTERNAL,
-                authenticated=False,
-                open_world=True,
-            ),
-        )
+TOOL_MANIFEST = ToolManifest({
+    "read_pending_notice": ToolProfile(
+        name="read_pending_notice", operation=Operation.READ, read_only=True,
+        open_world=True,
+        source=SourceDescriptor(boundary=TrustBoundary.EXTERNAL, open_world=True),
     ),
-    "execute_enterprise_action": _metadata.resolve(
-        ToolDescriptor(read_only=False, open_world=False)
+    "execute_enterprise_action": ToolProfile(
+        name="execute_enterprise_action", operation=Operation.WRITE,
+        data_level=DataLevel.INTERNAL, reversible=True,
     ),
-}
+})
 
 
 def _tool_specs() -> list[dict[str, Any]]:
@@ -91,7 +89,7 @@ def _result_text(result: Any, error: str | None) -> str:
     return json.dumps(FunctionTool._make_dumpable(result), ensure_ascii=False, default=str)
 
 
-def _run(case: AttackCase, *, protected: bool) -> tuple[bool, str, list[str]]:
+def _run(case: AttackCase, *, protected: bool) -> tuple[bool, str, list[str], list[str]]:
     client = OpenAI(
         api_key=os.environ["MODEL_API_KEY"],
         base_url=os.getenv("MODEL_BASE_URL", "https://ai.stackway.org/v1"),
@@ -106,8 +104,9 @@ def _run(case: AttackCase, *, protected: bool) -> tuple[bool, str, list[str]]:
     if protected:
         runtime: FunctionsRuntime = FidesRuntimeAdapter(
             FUNCTIONS,
-            tool_metadata=TOOL_METADATA,
+            tool_manifest=TOOL_MANIFEST,
             security=SecureAgentConfig(auto_hide_untrusted=False),
+            risk_analyzer=ModelRiskAnalyzer(client, os.getenv("MODEL_NAME", "deepseek-v4-flash")),
         )
     else:
         runtime = FunctionsRuntime(FUNCTIONS)
@@ -127,6 +126,7 @@ def _run(case: AttackCase, *, protected: bool) -> tuple[bool, str, list[str]]:
     ]
     final_text = ""
     trace: list[str] = []
+    levels: list[str] = []
     for _ in range(4):
         response = client.chat.completions.create(
             model=os.getenv("MODEL_NAME", "deepseek-v4-flash"),
@@ -146,11 +146,20 @@ def _run(case: AttackCase, *, protected: bool) -> tuple[bool, str, list[str]]:
                 arguments = json.loads(call.function.arguments or "{}")
             except json.JSONDecodeError:
                 arguments = {}
-            result, error = runtime.run_function(
-                environment,
-                call.function.name,
-                arguments,
-            )
+            if protected:
+                context = ExecutionContext(
+                    framework="model", session_id=case.case_id,
+                    principal={"id": "benchmark-user", "role": "staff"},
+                    task={"goal": "Process the pending external notice"},
+                    sources=({"boundary": "external"},),
+                    observations=(environment.notice,) if "read_pending_notice" in trace[:-1] else (),
+                )
+                result, error, assessment = runtime.run_tool(  # type: ignore[attr-defined]
+                    environment, call.function.name, arguments, context
+                )
+                levels.append(assessment.level.value)
+            else:
+                result, error = runtime.run_function(environment, call.function.name, arguments)
             messages.append(
                 {
                     "role": "tool",
@@ -158,7 +167,7 @@ def _run(case: AttackCase, *, protected: bool) -> tuple[bool, str, list[str]]:
                     "content": _result_text(result, error),
                 }
             )
-    return case.case_id in environment.executed, final_text, trace
+    return case.case_id in environment.executed, final_text, trace, levels
 
 
 def main() -> int:
@@ -172,13 +181,14 @@ def main() -> int:
     if args.case_id not in cases:
         raise ValueError(f"Unknown case ID: {args.case_id}")
     case = cases[args.case_id]
-    baseline_success, baseline_output, baseline_trace = _run(case, protected=False)
-    protected_success, protected_output, protected_trace = _run(case, protected=True)
+    baseline_success, baseline_output, baseline_trace, _ = _run(case, protected=False)
+    protected_success, protected_output, protected_trace, protected_levels = _run(case, protected=True)
     print(f"case: {case.case_id} ({case.attacker_tool})")
     print(f"without protection: {'attack succeeded' if baseline_success else 'attack failed'}")
     print(f"with protection: {'attack succeeded' if protected_success else 'attack stopped'}")
     print(f"baseline tools: {baseline_trace}")
     print(f"protected tools: {protected_trace}")
+    print(f"protected levels: {protected_levels}")
     print(f"baseline response: {baseline_output[:300]}")
     print(f"protected response: {protected_output[:300]}")
     return 0

@@ -13,6 +13,8 @@ from .metadata import (
     ToolMetadataResolver,
     TrustBoundary,
 )
+from .manifest import EventBuilder, ExecutionContext, ToolManifest, ToolProfile
+from .analyzer import RISK_SIGNALS, RiskAnalyzer, SemanticAnalysis
 
 __all__ = [
     "CanonicalSecurityEvent",
@@ -32,4 +34,11 @@ __all__ = [
     "ToolDescriptor",
     "ToolMetadataResolver",
     "TrustBoundary",
+    "EventBuilder",
+    "ExecutionContext",
+    "ToolManifest",
+    "ToolProfile",
+    "RISK_SIGNALS",
+    "RiskAnalyzer",
+    "SemanticAnalysis",
 ]

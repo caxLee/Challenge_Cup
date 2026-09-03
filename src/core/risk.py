@@ -40,6 +40,16 @@ class RuleRiskEngine:
             add(RiskLevel.L1, "internal-read", "Internal read-only operation")
         if "prompt_injection" in event.risk_signals:
             add(RiskLevel.L2, "injection-signal", "Prompt-injection signal detected")
+        if "unregistered_tool" in event.risk_signals:
+            add(RiskLevel.L4, "unregistered-tool", "Tool has no approved capability manifest")
+        if set(event.risk_signals) & {"data_exfiltration", "credential_exposure"}:
+            add(RiskLevel.L4, "semantic-egress", "Semantic analysis detected sensitive data exposure")
+        if set(event.risk_signals) & {"privilege_escalation", "security_bypass"}:
+            add(RiskLevel.L4, "semantic-privilege", "Semantic analysis detected privilege or security-control abuse")
+        if "destructive_action" in event.risk_signals:
+            add(RiskLevel.L4, "semantic-destruction", "Semantic analysis detected destructive action")
+        if "arbitrary_code_execution" in event.risk_signals:
+            add(RiskLevel.L3, "semantic-execution", "Semantic analysis detected arbitrary code execution")
         if event.operation is Operation.WRITE:
             add(RiskLevel.L2, "ordinary-write", "Operation changes business state")
         if event.operation is Operation.EXECUTE:

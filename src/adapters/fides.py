@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from dataclasses import replace
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -16,7 +17,11 @@ from agent_framework.security import (
     SecureAgentConfig,
 )
 
-from core import CanonicalSecurityEvent, Disposition, RiskAssessment, RuleRiskEngine
+from core import (
+    CanonicalSecurityEvent, Disposition, EventBuilder, ExecutionContext,
+    RiskAssessment, RuleRiskEngine, ToolManifest,
+)
+from core.analyzer import RiskAnalyzer, SemanticAnalysis
 from .approval import FidesApprovalAdapter
 from eval.runtime import Function, FunctionsRuntime, TaskEnvironment, ToolNotFoundError
 
@@ -53,16 +58,25 @@ class FidesRuntimeAdapter(FunctionsRuntime):
         security: SecureAgentConfig | None = None,
         risk_engine: RuleRiskEngine | None = None,
         approvals: FidesApprovalAdapter | None = None,
+        tool_manifest: ToolManifest | None = None,
+        risk_analyzer: RiskAnalyzer | None = None,
+        semantic_threshold: float = 0.7,
     ) -> None:
         super().__init__(functions)
         self.security = security or SecureAgentConfig()
         self.risk_engine = risk_engine or RuleRiskEngine()
         self.approvals = approvals or FidesApprovalAdapter()
+        self.tool_manifest = tool_manifest
+        self.event_builder = EventBuilder(tool_manifest) if tool_manifest is not None else None
+        self.risk_analyzer = risk_analyzer
+        self.semantic_threshold = semantic_threshold
+        self.last_analysis = SemanticAnalysis()
         middleware = [self.security.label_tracker]
         if self.security.policy_enforcer is not None:
             middleware.append(self.security.policy_enforcer)
         self._pipeline = FunctionMiddlewarePipeline(*middleware)
-        metadata = tool_metadata or {}
+        metadata = dict(tool_manifest.metadata()) if tool_manifest is not None else {}
+        metadata.update(tool_metadata or {})
         self._tools = {
             function.name: FunctionTool(
                 name=function.name,
@@ -174,3 +188,38 @@ class FidesRuntimeAdapter(FunctionsRuntime):
                 return "", f"ApprovalDenied: {result.reason}", assessment
         value, error = self.run_function(environment, event.tool_name, event.arguments)
         return value, error, assessment
+
+    def run_tool(
+        self,
+        environment: TaskEnvironment,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        context: ExecutionContext,
+        *,
+        approval_response: Content | None = None,
+        approver: Mapping[str, Any] | None = None,
+    ) -> tuple[Any, str | None, RiskAssessment]:
+        """Unified entry point: context -> event -> risk -> approval -> FIDES."""
+
+        if self.event_builder is None:
+            raise RuntimeError("run_tool requires a ToolManifest")
+        if self.risk_analyzer is not None:
+            self.last_analysis = self.risk_analyzer.analyze(
+                task=context.task,
+                observations=context.observations,
+                tool_name=tool_name,
+                arguments=arguments,
+            )
+            if self.last_analysis.confidence >= self.semantic_threshold:
+                context = replace(
+                    context,
+                    risk_signals=tuple(dict.fromkeys(
+                        (*context.risk_signals, *self.last_analysis.signals)
+                    )),
+                )
+        event = self.event_builder.build(tool_name, arguments, context)
+        return self.run_event(
+            environment, event,
+            approval_response=approval_response,
+            approver=approver,
+        )

@@ -1,0 +1,26 @@
+tools:
+  knowledge.search:
+    operation: read
+    data_level: public
+    read_only: true
+    open_world: true
+    source:
+      boundary: external
+      open_world: true
+
+  records.update:
+    operation: write
+    data_level: internal
+    reversible: true
+
+  database.export:
+    operation: exfiltrate
+    data_level: sensitive
+    destination_trust: external
+
+  shell.execute:
+    operation: execute
+    data_level: internal
+    environment: production
+    privileged: true
+    reversible: false
