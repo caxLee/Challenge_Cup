@@ -8,6 +8,11 @@ tools:
       boundary: external
       open_world: true
 
+  knowledge.internal_search:
+    operation: read
+    data_level: internal
+    read_only: true
+
   records.update:
     operation: write
     data_level: internal

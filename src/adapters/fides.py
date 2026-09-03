@@ -203,7 +203,9 @@ class FidesRuntimeAdapter(FunctionsRuntime):
 
         if self.event_builder is None:
             raise RuntimeError("run_tool requires a ToolManifest")
-        if self.risk_analyzer is not None:
+        # An approval resolves the already-assessed request. Re-running the
+        # model here could change the decision after a human has approved it.
+        if self.risk_analyzer is not None and approval_response is None:
             self.last_analysis = self.risk_analyzer.analyze(
                 task=context.task,
                 observations=context.observations,

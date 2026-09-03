@@ -22,5 +22,12 @@ __pycache__/
 .env.*
 !.env.example
 
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+
 # Local licenses not included in the current submission
 licenses/
+
+.env
