@@ -29,3 +29,5 @@ frontend/*.tsbuildinfo
 
 # Local licenses not included in the current submission
 licenses/
+
+.env
