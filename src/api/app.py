@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 from uuid import uuid4
@@ -29,6 +30,12 @@ class RuntimeState(TaskEnvironment):
 
 
 def knowledge_search(
+    environment: Annotated[RuntimeState, Depends(lambda value: value)], query: str
+) -> dict[str, str | None]:
+    return {"query": query, "result": environment.knowledge.get(query)}
+
+
+def knowledge_internal_search(
     environment: Annotated[RuntimeState, Depends(lambda value: value)], query: str
 ) -> dict[str, str | None]:
     return {"query": query, "result": environment.knowledge.get(query)}
@@ -63,6 +70,7 @@ def _functions():
     functions = []
     for name, function in {
         "knowledge.search": knowledge_search,
+        "knowledge.internal_search": knowledge_internal_search,
         "records.update": records_update,
         "database.export": database_export,
         "shell.execute": shell_execute,
@@ -74,11 +82,11 @@ def _functions():
 
 
 class TaskRequest(BaseModel):
-    goal: str
-    tool: str
+    goal: str = Field(min_length=1)
+    tool: str = Field(min_length=1)
     arguments: dict[str, Any] = Field(default_factory=dict)
-    user_id: str
-    user_role: str = "staff"
+    user_id: str = Field(min_length=1)
+    user_role: str = Field(default="staff", min_length=1)
     sources: list[dict[str, Any]] = Field(default_factory=lambda: [{"boundary": "user"}])
     observations: list[str] = Field(default_factory=list)
     destination: dict[str, Any] = Field(default_factory=dict)
@@ -87,8 +95,8 @@ class TaskRequest(BaseModel):
 
 class ApprovalRequest(BaseModel):
     approved: bool
-    approver_id: str
-    approver_role: str = "staff"
+    approver_id: str = Field(min_length=1)
+    approver_role: str = Field(default="staff", min_length=1)
 
 
 @dataclass
@@ -131,10 +139,25 @@ _tasks: dict[str, TaskRecord] = {}
 
 def _view(task_id: str, record: TaskRecord) -> dict[str, Any]:
     approval_id = str(record.approval.id) if record.approval is not None else None
+    disposition = record.risk.get("disposition")
+    approval_required = record.approval is not None
+    approval_kind = disposition if approval_required else None
+    required_approver = (
+        "requester" if approval_required and disposition == "confirm" else
+        "independent_approver" if approval_required and disposition == "approve" else None
+    )
     return {
         "task_id": task_id,
         "status": record.status,
+        "request": record.request.model_dump(),
         "risk": record.risk,
+        "approval": {
+            "required": approval_required,
+            "approval_id": approval_id,
+            "kind": approval_kind,
+            "required_approver": required_approver,
+        },
+        # Kept as a compatibility alias for the original demo client.
         "approval_id": approval_id,
         "result": _jsonable(record.result),
         "error": record.error,
@@ -147,6 +170,18 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: _jsonable(item) for key, item in value.items()}
     return FunctionTool._make_dumpable(value)
+
+
+def _append_event(record: TaskRecord, event: str, message: str, error: str | None = None) -> None:
+    record.events.append({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "status": record.status,
+        "risk_level": record.risk.get("level", "L0"),
+        "disposition": record.risk.get("disposition", "allow"),
+        "event": event,
+        "message": message,
+        "error": error,
+    })
 
 
 def _execute(record: TaskRecord, response: Content | None = None, approver: dict[str, Any] | None = None) -> None:
@@ -171,15 +206,22 @@ def _execute(record: TaskRecord, response: Content | None = None, approver: dict
         },
     }
     record.error = error
+    _append_event(record, "risk_assessed", "Risk assessment completed", error)
     if isinstance(result, Content) and result.type == "function_approval_request":
         record.approval = result
         record.status = "waiting_confirmation" if assessment.level.value == "L2" else "waiting_approval"
+        _append_event(record, "approval_requested", "Approval is required before tool execution")
     elif error:
         record.status = "blocked" if assessment.level.value == "L4" else "rejected"
+        if response is not None:
+            _append_event(record, "approval_resolved", "Approval was rejected", error)
+        _append_event(record, record.status, "Task was blocked" if record.status == "blocked" else "Task was rejected", error)
     else:
         record.result = result
         record.status = "completed"
-    record.events.append({"status": record.status, "risk": record.risk, "error": error})
+        if response is not None:
+            _append_event(record, "approval_resolved", "Approval was accepted")
+        _append_event(record, "completed", "Tool execution completed")
 
 
 @app.get("/health")
@@ -189,6 +231,8 @@ def health() -> dict[str, Any]:
 
 @app.post("/tasks")
 def create_task(request: TaskRequest) -> dict[str, Any]:
+    if _manifest.get(request.tool) is None:
+        raise HTTPException(400, f"Unknown tool: {request.tool}")
     task_id = uuid4().hex
     context = ExecutionContext(
         framework="security-api",
@@ -211,6 +255,7 @@ def create_task(request: TaskRequest) -> dict[str, Any]:
         context=context,
     )
     _tasks[task_id] = record
+    _append_event(record, "created", "Task created")
     _execute(record)
     return _view(task_id, record)
 
@@ -241,18 +286,39 @@ def resolve_approval(approval_id: str, request: ApprovalRequest) -> dict[str, An
     if match is None:
         raise HTTPException(404, "Approval not found")
     task_id, record = match
+    if record.risk.get("level") == "L4":
+        raise HTTPException(400, "L4 tasks cannot be approved")
+    if record.risk.get("level") == "L2":
+        if request.approver_id != record.request.user_id:
+            raise HTTPException(400, "L2 confirmation must be performed by the requester")
+        if request.approver_role != "staff":
+            raise HTTPException(400, "L2 confirmation requires the staff role")
+    elif record.risk.get("level") == "L3":
+        if request.approver_role not in {"approver", "admin"}:
+            raise HTTPException(400, "L3 approval requires approver or admin role")
+        if request.approver_id == record.request.user_id:
+            raise HTTPException(400, "L3 approval requires an independent approver")
     response = record.approval.to_function_approval_response(request.approved)
-    record.approval = None
     _execute(
         record, response,
         {"id": request.approver_id, "role": request.approver_role},
     )
+    record.approval = None
     return _view(task_id, record)
 
 
 @app.get("/audit")
 def audit() -> list[dict[str, Any]]:
     return [
-        {"task_id": task_id, "events": record.events, "approvals": record.runtime.approvals.audit_log}
+        {
+            "task_id": task_id,
+            "user_id": record.request.user_id,
+            "tool": record.request.tool,
+            "risk_level": record.risk.get("level"),
+            "status": record.status,
+            "events": record.events,
+            "approval_audit_log": record.runtime.approvals.audit_log,
+            "approvals": record.runtime.approvals.audit_log,
+        }
         for task_id, record in _tasks.items()
     ]

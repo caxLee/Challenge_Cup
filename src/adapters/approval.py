@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -61,7 +61,7 @@ class FidesApprovalAdapter:
             signature=self._signature(event, assessment),
             requester=str(event.principal.get("id", "")),
             disposition=assessment.disposition,
-            expires_at=datetime.now(UTC) + self.ttl,
+            expires_at=datetime.now(timezone.utc) + self.ttl,
         )
         request = Content.from_function_approval_request(
             id=call_id,
@@ -94,7 +94,7 @@ class FidesApprovalAdapter:
         )
         reason = "approval_not_pending"
         approved = False
-        if pending is not None and datetime.now(UTC) > pending.expires_at:
+        if pending is not None and datetime.now(timezone.utc) > pending.expires_at:
             reason = "approval_expired"
         elif pending is not None and pending.signature != self._signature(event, assessment):
             reason = "approval_binding_mismatch"
